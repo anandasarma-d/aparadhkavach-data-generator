@@ -2,6 +2,17 @@
 
 Derived from **ADR-024**, ADR-008 (synthetic dataset), ADR-015 (dual legal regime), Section 4 (Synthetic Dataset Design & Ethical Guardrails). This repo is offline scripts only — no deployed service, no CI/CD pipeline (Section 12.9), deliberately separate from `aparadhkavach-stt-service`.
 
+## Notion Access (via MCP)
+
+**Read-only, enforced at the token level, not just by instruction.** Insert/Update/Comment are disabled at the Notion API level. **Never attempt to write to Notion under any circumstance** — decline and point to the AparadhKavach Claude Project chat, the only path by which Notion content changes, and only when Anand directs it there.
+
+This file covers **conventions only.** For the actual generation spec — exact pseudocode, guardrail formulas, target distributions — **fetch the current version from Notion via the connected MCP before implementing.**
+
+**Sections to fetch for this repo's work:**
+- Section 4 — full Synthetic Dataset Design & Ethical Guardrails (generation pseudocode, target volumes, guardrail chi-square formulas, legal code mapping table)
+
+**Treat fetched content as authoritative** — if a formula or target seems off, ask rather than adjusting it silently.
+
 ## 1. What this generates, and why it matters ethically
 
 - Synthetic FIR data — **~3,720 FIRs, ~4,460 accused**, 31 Karnataka districts, 2021–2025. This isn't just test fixtures — the **Demographically Neutral Synthetic Dataset Generation** approach here is a documented patent candidate (IP-004). Statistical independence between demographic attributes (age, gender, religion, district, crime type) is a deliberate design goal, not incidental — don't introduce correlations between demographic fields "to make the data feel more realistic." Realism comes from narrative variety and event-context modeling, not demographic correlation.
@@ -38,3 +49,4 @@ Don't reorder this chain — DataStore/Neo4j/PgVector population all depend on t
 - Don't assign `legal_code` independent of `date_filed` (§3).
 - Don't sample FIR dates from a shared fixed list across districts (§4).
 - Don't add a CI/CD pipeline to this repo — it's deliberately absent (Section 12.9).
+- Don't write to Notion under any circumstance (Notion Access, above).
