@@ -219,3 +219,6 @@ __marimo__/
 
 # macos
 **/.DS_Store
+
+# Notion MCP
+.cursor/mcp.json
