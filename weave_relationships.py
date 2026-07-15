@@ -218,27 +218,66 @@ def weave_accused_in(accused: list[dict], firs: list[dict], repeat_rate: float,
 # ---------------------------------------------------------------------------
 
 def weave_victim_in(victims: list[dict], firs: list[dict]) -> list[dict]:
-    female_ids = [v["victim_id"] for v in victims if v["gender"] == "FEMALE"]
-    all_ids = [v["victim_id"] for v in victims]
-    used_pool: list[str] = []
-    rows = []
+    """Defect Tracker: weave_relationships.py (VICTIM_IN/WITNESSED
+    coupon-collector coverage gap). The old version drew every slot via
+    random.choice(all_ids), which - like ACCUSED_IN before its Day 2 fix -
+    leaves a meaningful fraction of the pool never drawn at all even when
+    total draws roughly match or exceed pool size (coupon collector
+    problem). Fixed the same way ACCUSED_IN was: round-robin assignment
+    guarantees every victim is used at least once before any repeats.
+
+    DV (498A/304B) female-skew (Section 4.6) is applied as a *post-hoc
+    swap* on top of the round-robin assignment rather than a per-draw
+    coin flip: swapping two already-assigned slots' victims can never
+    reduce coverage (the same multiset of victims stays assigned, just
+    redistributed across FIRs), so the coverage guarantee holds
+    regardless of how the swap pass behaves.
+    """
+    victim_ids = [v["victim_id"] for v in victims]
+    gender_by_id = {v["victim_id"]: v["gender"] for v in victims}
+    random.shuffle(victim_ids)
+
+    slot_firs: list[dict] = []
     for fir in firs:
         k = random.choices([1, 2], weights=[75, 25], k=1)[0]
-        date_filed = date.fromisoformat(fir["date_filed"])
-        for _ in range(k):
-            if random.random() < 0.05 and used_pool:
-                victim_id = random.choice(used_pool)  # rare cross-FIR victim reuse
-            elif fir["crime_type"] == DV_CATEGORY and random.random() < 0.85 and female_ids:
-                victim_id = random.choice(female_ids)
-            else:
-                victim_id = random.choice(all_ids)
-            used_pool.append(victim_id)
-            rows.append({
-                "victim_id": victim_id,
-                "fir_id": fir["fir_id"],
-                "injury_severity": random.choices(INJURY_SEVERITY, weights=[40, 30, 20, 10], k=1)[0],
-                "complaint_type": random.choices(COMPLAINT_TYPE, weights=[55, 25, 15, 5], k=1)[0],
-            })
+        slot_firs.extend([fir] * k)
+
+    n_slots = len(slot_firs)
+    # Round-robin coverage: slot i gets victim_ids[i % len(victim_ids)].
+    # Wraparound (n_slots > len(victim_ids)) is exactly Section 5.3's
+    # "one victim can appear in multiple FIRs (rare but possible)" -
+    # spread evenly by construction instead of a bolted-on random-reuse
+    # chance.
+    assigned = [victim_ids[i % len(victim_ids)] for i in range(n_slots)]
+    if n_slots < len(victim_ids):
+        print(f"    ! only {n_slots} victim slots for {len(victim_ids)} victims - "
+              f"{len(victim_ids) - n_slots} victims cannot be covered this run")
+
+    # DV female-skew swap pass.
+    dv_slot_indices = [i for i in range(n_slots) if slot_firs[i]["crime_type"] == DV_CATEGORY]
+    dv_slot_set = set(dv_slot_indices)  # membership checks only, never iterated
+    female_donor_queue = [i for i in range(n_slots)
+                           if i not in dv_slot_set and gender_by_id[assigned[i]] == "FEMALE"]
+    donor_ptr = 0
+    for dv_idx in dv_slot_indices:
+        if gender_by_id[assigned[dv_idx]] == "FEMALE":
+            continue
+        if random.random() >= 0.85:
+            continue
+        if donor_ptr >= len(female_donor_queue):
+            continue  # no more female donors available - best-effort skew, not a hard guarantee
+        donor_idx = female_donor_queue[donor_ptr]
+        donor_ptr += 1
+        assigned[dv_idx], assigned[donor_idx] = assigned[donor_idx], assigned[dv_idx]
+
+    rows = []
+    for fir, victim_id in zip(slot_firs, assigned):
+        rows.append({
+            "victim_id": victim_id,
+            "fir_id": fir["fir_id"],
+            "injury_severity": random.choices(INJURY_SEVERITY, weights=[40, 30, 20, 10], k=1)[0],
+            "complaint_type": random.choices(COMPLAINT_TYPE, weights=[55, 25, 15, 5], k=1)[0],
+        })
     return rows
 
 
@@ -247,27 +286,36 @@ def weave_victim_in(victims: list[dict], firs: list[dict]) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 def weave_witnessed(witnesses: list[dict], firs: list[dict], coverage: float = 0.40) -> list[dict]:
-    all_ids = [w["witness_id"] for w in witnesses]
-    used_pool: list[str] = []
-    rows = []
+    """Defect Tracker: weave_relationships.py (VICTIM_IN/WITNESSED
+    coupon-collector coverage gap) - same round-robin-before-repeats fix
+    as weave_victim_in() above and weave_accused_in()'s Day 2 fix."""
+    witness_ids = [w["witness_id"] for w in witnesses]
+    random.shuffle(witness_ids)
+
     n_target = round(len(firs) * coverage)
     chosen_firs = random.sample(firs, k=min(n_target, len(firs)))
+
+    slot_firs: list[dict] = []
     for fir in chosen_firs:
         k = random.choices([1, 2], weights=[70, 30], k=1)[0]
+        slot_firs.extend([fir] * k)
+
+    n_slots = len(slot_firs)
+    assigned = [witness_ids[i % len(witness_ids)] for i in range(n_slots)]
+    if n_slots < len(witness_ids):
+        print(f"    ! only {n_slots} witness slots for {len(witness_ids)} witnesses - "
+              f"{len(witness_ids) - n_slots} witnesses cannot be covered this run")
+
+    rows = []
+    for fir, witness_id in zip(slot_firs, assigned):
         date_filed = date.fromisoformat(fir["date_filed"])
-        for _ in range(k):
-            if random.random() < 0.03 and used_pool:
-                witness_id = random.choice(used_pool)
-            else:
-                witness_id = random.choice(all_ids)
-            used_pool.append(witness_id)
-            statement_date = date_filed + timedelta(days=random.randint(0, 10))
-            rows.append({
-                "witness_id": witness_id,
-                "fir_id": fir["fir_id"],
-                "statement_date": statement_date.isoformat(),
-                "statement_reliability": random.choices(STATEMENT_RELIABILITY, weights=[50, 35, 15], k=1)[0],
-            })
+        statement_date = date_filed + timedelta(days=random.randint(0, 10))
+        rows.append({
+            "witness_id": witness_id,
+            "fir_id": fir["fir_id"],
+            "statement_date": statement_date.isoformat(),
+            "statement_reliability": random.choices(STATEMENT_RELIABILITY, weights=[50, 35, 15], k=1)[0],
+        })
     return rows
 
 
@@ -275,26 +323,107 @@ def weave_witnessed(witnesses: list[dict], firs: list[dict], coverage: float = 0
 # OCCURRED_AT
 # ---------------------------------------------------------------------------
 
-def weave_occurred_at(locations: list[dict], firs: list[dict], hotspot_fraction: float = 0.20) -> list[dict]:
+def weave_occurred_at(locations: list[dict], firs: list[dict], hotspot_fraction: float = 0.20,
+                       hotspot_min_incidents: int = 4, hotspot_max_incidents: int = 8,
+                       normal_cap: int = 3) -> list[dict]:
+    """Defect Tracker: weave_relationships.py (OCCURRED_AT hotspot
+    draw-split mismatch). The old version drew from the hotspot subset vs.
+    the full per-district pool via a flat 50/50 coin flip. Two problems
+    followed: (1) the full "pool" branch always included the hotspot
+    locations too, so hotspots got hit from *both* branches and badly
+    overshot the >3-incidents-each hotspot definition (304 actual vs. ~224
+    target = 20% of 1,120); (2) plain random.choice() over the ~80% normal
+    locations left a coupon-collector-style gap - 172 locations never drawn
+    at all (isolated nodes in Neo4j).
+
+    Fixed with an explicit per-district budget instead of a coin flip:
+    each hotspot location gets a reserved incident count randomly drawn
+    from [hotspot_min_incidents, hotspot_max_incidents] (comfortably over
+    the >3 threshold without being absurd), and every remaining FIR is
+    distributed round-robin across the normal (non-hotspot) locations,
+    capped at `normal_cap` each so they don't accidentally cross the
+    hotspot threshold themselves - closing the same coupon-collector gap
+    class as the VICTIM_IN/WITNESSED fix above. Only genuine overflow (a
+    district with far more FIRs than 3-per-normal-location can absorb)
+    spills back onto the hotspot locations, which is the correct place for
+    a district's "extra" incident density to land.
+    """
     locations_by_district: dict[str, list[str]] = defaultdict(list)
     for loc in locations:
         locations_by_district[loc["district"]].append(loc["location_id"])
 
-    hotspots_by_district: dict[str, list[str]] = {}
-    for district, loc_ids in locations_by_district.items():
-        random.shuffle(loc_ids)
-        n_hot = max(1, round(len(loc_ids) * hotspot_fraction))
-        hotspots_by_district[district] = loc_ids[:n_hot]
+    firs_by_district: dict[str, list[dict]] = defaultdict(list)
+    for fir in firs:
+        firs_by_district[fir["district"]].append(fir)
 
+    assignment: dict[str, str] = {}
+
+    for district, loc_ids in locations_by_district.items():
+        loc_ids = list(loc_ids)
+        random.shuffle(loc_ids)
+        district_firs = firs_by_district.get(district, [])
+        n_firs = len(district_firs)
+        if n_firs == 0 or not loc_ids:
+            continue
+
+        n_hot = max(1, round(len(loc_ids) * hotspot_fraction))
+        hot_locs = loc_ids[:n_hot]
+        normal_locs = loc_ids[n_hot:]
+
+        hotspot_targets = [random.randint(hotspot_min_incidents, hotspot_max_incidents) for _ in hot_locs]
+        total_hotspot_budget = sum(hotspot_targets)
+        if total_hotspot_budget > n_firs:
+            # Sparse district - this district's FIR supply can't fill even
+            # the minimum hotspot reservation; scale down proportionally
+            # rather than starving every other location in the district.
+            scale = n_firs / total_hotspot_budget
+            hotspot_targets = [max(1, int(t * scale)) for t in hotspot_targets]
+            total_hotspot_budget = sum(hotspot_targets)
+
+        location_queue: list[str] = []
+        for loc_id, target in zip(hot_locs, hotspot_targets):
+            location_queue.extend([loc_id] * target)
+
+        remaining = n_firs - len(location_queue)
+
+        if normal_locs and remaining > 0:
+            per_location_count: dict[str, int] = defaultdict(int)
+            i = 0
+            n_normal = len(normal_locs)
+            while remaining > 0 and any(per_location_count[loc] < normal_cap for loc in normal_locs):
+                loc_id = normal_locs[i % n_normal]
+                i += 1
+                if per_location_count[loc_id] < normal_cap:
+                    location_queue.append(loc_id)
+                    per_location_count[loc_id] += 1
+                    remaining -= 1
+
+        overflow_pool = hot_locs or normal_locs
+        if remaining > 0 and overflow_pool:
+            j = 0
+            n_overflow = len(overflow_pool)
+            while remaining > 0:
+                location_queue.append(overflow_pool[j % n_overflow])
+                j += 1
+                remaining -= 1
+
+        # Shuffle so hotspot-vs-normal assignment doesn't correlate with
+        # district_firs's original (roughly chronological) order.
+        random.shuffle(location_queue)
+        for fir, location_id in zip(district_firs, location_queue):
+            assignment[fir["fir_id"]] = location_id
+
+    all_location_ids = [l["location_id"] for l in locations]
     rows = []
     for fir in firs:
         district = fir["district"]
-        pool = locations_by_district.get(district) or [l["location_id"] for l in locations]
-        hot_pool = hotspots_by_district.get(district) or pool
-        if random.random() < 0.5:
-            location_id = random.choice(hot_pool)
-        else:
-            location_id = random.choice(pool)
+        location_id = assignment.get(fir["fir_id"])
+        if location_id is None:
+            # Fallback: FIR's district had no locations at all (shouldn't
+            # happen - Section 4.2 guarantees every district gets
+            # locations) - pick from the global pool so no FIR is left
+            # without a location.
+            location_id = random.choice(all_location_ids)
         rows.append({
             "fir_id": fir["fir_id"],
             "location_id": location_id,
