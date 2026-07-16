@@ -213,6 +213,62 @@ def weave_accused_in(accused: list[dict], firs: list[dict], repeat_rate: float,
     return rows
 
 
+def backfill_accused_offense_history(
+    accused_in_rows: list[dict], firs: list[dict], accused_persons_csv: Path
+) -> dict[str, dict]:
+    """Backfills prior_offense_count/first_offense_date/last_offense_date into the already-
+    generated Catalyst DataStore accused_persons.csv, computed from ACCUSED_IN assignments
+    (this function) joined against firs.date_filed.
+
+    Deliberately does NOT touch risk_score or risk_score_updated_at - those are populated
+    later by the Day 7 QuickML pipeline, not at generation time (out of scope here).
+
+    Patches only these 3 columns in place; every other column (name, age, gender,
+    address_district_id, etc.) is left exactly as catalyst_datastore_transform.py already
+    wrote it - that script is out of scope for this fix and is not touched or re-run.
+    """
+    fir_date_filed = {f["fir_id"]: f["date_filed"] for f in firs}
+
+    offense_dates: dict[str, list[str]] = defaultdict(list)
+    for row in accused_in_rows:
+        offense_dates[row["accused_id"]].append(fir_date_filed[row["fir_id"]])
+
+    backfill: dict[str, dict] = {}
+    for accused_id, dates in offense_dates.items():
+        sorted_dates = sorted(dates)
+        backfill[accused_id] = {
+            "prior_offense_count": len(dates),
+            "first_offense_date": sorted_dates[0],
+            "last_offense_date": sorted_dates[-1],
+        }
+
+    with accused_persons_csv.open(newline="") as f:
+        reader = csv.DictReader(f)
+        fieldnames = reader.fieldnames
+        rows = list(reader)
+
+    uncovered = 0
+    for row in rows:
+        info = backfill.get(row["accused_id"])
+        if info:
+            row["prior_offense_count"] = str(info["prior_offense_count"])
+            row["first_offense_date"] = info["first_offense_date"]
+            row["last_offense_date"] = info["last_offense_date"]
+        else:
+            uncovered += 1
+
+    with accused_persons_csv.open("w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
+
+    print(
+        f"  backfilled {len(backfill)} accused with offense-history data "
+        f"-> {accused_persons_csv} ({uncovered} accused had 0 ACCUSED_IN rows, left as-is)"
+    )
+    return backfill
+
+
 # ---------------------------------------------------------------------------
 # VICTIM_IN
 # ---------------------------------------------------------------------------
@@ -654,6 +710,13 @@ def main():
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--repeat-rate", type=float, default=0.15)
     parser.add_argument("--cross-district-rate", type=float, default=0.08)
+    parser.add_argument(
+        "--accused-persons-csv",
+        type=Path,
+        default=Path("data/catalyst_datastore/accused_persons.csv"),
+        help="Catalyst DataStore accused_persons.csv to backfill prior_offense_count/"
+        "first_offense_date/last_offense_date into (in place).",
+    )
     args = parser.parse_args()
 
     random.seed(args.seed)
@@ -703,6 +766,36 @@ def main():
                         _count_fir_per_accused(accused_in_rows).items() if cnt >= 2)
     print(f"[weave_relationships] repeat offenders: {repeat_count} "
           f"({repeat_count / len(data['accused']) * 100:.1f}% of {len(data['accused'])} accused)")
+
+    if args.accused_persons_csv.exists():
+        with args.accused_persons_csv.open(newline="") as f:
+            before_rows = list(csv.DictReader(f))
+        before_zero = sum(1 for r in before_rows if r["prior_offense_count"] == "0")
+        print(
+            f"[weave_relationships] accused_persons.csv before backfill: "
+            f"{before_zero}/{len(before_rows)} rows have prior_offense_count == 0 "
+            f"({before_zero / len(before_rows) * 100:.1f}%)"
+        )
+
+        backfill_accused_offense_history(accused_in_rows, data["firs"], args.accused_persons_csv)
+
+        with args.accused_persons_csv.open(newline="") as f:
+            after_rows = list(csv.DictReader(f))
+        after_zero = sum(1 for r in after_rows if r["prior_offense_count"] == "0")
+        after_nonzero_gt1 = sum(1 for r in after_rows if int(r["prior_offense_count"]) > 1)
+        print(
+            f"[weave_relationships] accused_persons.csv after backfill: "
+            f"{after_zero}/{len(after_rows)} rows have prior_offense_count == 0 "
+            f"({after_zero / len(after_rows) * 100:.1f}%); "
+            f"{after_nonzero_gt1} rows have prior_offense_count > 1 "
+            f"({after_nonzero_gt1 / len(after_rows) * 100:.1f}% repeat-offender rate)"
+        )
+    else:
+        print(
+            f"[weave_relationships] WARNING: {args.accused_persons_csv} not found - "
+            "skipping prior_offense_count/first_offense_date/last_offense_date backfill"
+        )
+
     print("[weave_relationships] done.")
 
 
