@@ -1,0 +1,2 @@
+officer_id,name,rank,badge_number,station,district_id,is_active,roles,created_at,updated_at,created_by,updated_by
+OFF-SUPERADMIN-001,System Administrator,ADMIN,KSP-ADMIN-0001,State HQ,,true,"INVESTIGATOR,ANALYST,SUPERVISOR,POLICYMAKER",2026-07-16 22:05:25,2026-07-16 22:05:25,SYSTEM_SEED,SYSTEM_SEED
