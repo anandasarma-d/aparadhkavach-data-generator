@@ -639,10 +639,392 @@ WITNESS_NOTE_TEMPLATES = [
     "Statements from persons nearby at the time are being recorded.",
 ]
 
+# Round 2 fix for Section 4.7 Level 3 semantic validation (Defect Tracker,
+# "generate_entities.py (FIR narrative_text lexical variation)", re-diagnosed
+# 15 Jul 2026). Round 1 added wording variety to narrative_text's boilerplate
+# clauses, but investigation showed boilerplate is ~88% of narrative_text's
+# word count regardless of phrasing, and the embedding formula's other
+# component - modus_operandi - draws from only 3 fixed phrases per category
+# (NARRATIVE_MO_PHRASES above), so ~34-36% of a category's FIRs share the
+# exact same phrase. A semantic embedding model treats reworded boilerplate
+# as equivalent content, so Round 1 couldn't move same-category/cross-
+# category/gradient numbers - and the sparse MO pool alone guarantees heavy
+# same-category duplication once boilerplate is no longer diluting it.
+#
+# Fix: narrative_core (built below by _build_narrative_core) is a NEW field,
+# separate from narrative_text - short, boilerplate-free, and drawn from a
+# combinatorial pool (independent action + circumstance slots) rather than
+# a single flat list, so authoring ~8 action phrases per category still
+# yields 8x15=120 combinations, not 8. NARRATIVE_MO_PHRASES/modus_operandi
+# are left completely untouched (still feed narrative_text's intro sentence
+# and the modus_operandi field exactly as before) - narrative_core is used
+# only by embedding_ingestion.py's content formula, not stored in Catalyst
+# DataStore (Section 5.4's firs DDL has no narrative_core column; this is a
+# Phase-1-output-only field, flagged rather than silently added as schema).
+MO_ACTION_PHRASES = {
+    "Theft": [
+        "the accused allegedly pickpocketed the complainant's wallet in a crowded market",
+        "the accused reportedly slipped away with an unattended bag left on a shop counter",
+        "the complainant's mobile phone was allegedly lifted from a coat pocket on a crowded bus",
+        "the accused allegedly walked off with groceries and cash from an unlocked storefront",
+        "a gold chain was reportedly snatched from a display counter while the shopkeeper was distracted",
+        "the accused allegedly made off with a laptop bag left unattended at a cafe table",
+        "cash from the till was reportedly taken while the shop was momentarily unstaffed",
+        "the complainant's purse was allegedly lifted from a shopping cart in a supermarket",
+    ],
+    "Vehicle theft / snatching": [
+        "the accused allegedly rode off with a motorcycle parked outside a residential complex",
+        "a chain was reportedly snatched from the complainant while she was walking near a bus stop",
+        "the accused allegedly hotwired and drove away an unattended two-wheeler from a parking area",
+        "a mobile phone was reportedly snatched from the complainant's hand while boarding an auto-rickshaw",
+        "the accused allegedly drove off with a car left running outside a shop",
+        "an auto-rickshaw was reportedly taken from outside a workshop overnight",
+        "the accused allegedly snatched a gold bracelet while riding past on a two-wheeler",
+        "a delivery bike was reportedly stolen from outside a food stall during peak hours",
+    ],
+    "Assault / hurt": [
+        "the accused allegedly struck the complainant with a blunt object during a heated argument",
+        "a physical altercation reportedly broke out after a dispute over a parking space",
+        "the accused allegedly slapped and pushed the complainant following a verbal dispute",
+        "the complainant was reportedly punched in the face during a confrontation over an unpaid debt",
+        "a scuffle allegedly broke out between the two parties over a property boundary dispute",
+        "the accused reportedly assaulted the complainant with a wooden stick during a quarrel",
+        "the complainant allegedly sustained injuries after being thrown to the ground during a fight",
+        "the accused reportedly grabbed the complainant by the collar and struck him repeatedly",
+    ],
+    "Fraud / cheating": [
+        "the accused allegedly collected an advance payment for goods that were never delivered",
+        "the complainant was reportedly persuaded to invest in a scheme that turned out to be fraudulent",
+        "the accused allegedly issued a cheque that was later found to bounce due to insufficient funds",
+        "the complainant reportedly transferred money after being promised a job that did not exist",
+        "the accused allegedly forged signatures on a property document to claim ownership",
+        "a fake insurance claim was reportedly filed using fabricated medical documents",
+        "the complainant was allegedly overcharged through a manipulated billing system at a business",
+        "the accused reportedly sold counterfeit goods while claiming they were genuine branded products",
+    ],
+    "Robbery / dacoity": [
+        "the accused allegedly threatened the complainant with a knife before taking his wallet",
+        "a group reportedly surrounded the complainant near a deserted lane and took his belongings by force",
+        "the accused allegedly forced entry into the shop and took cash from the register at gunpoint",
+        "the complainant was reportedly waylaid on a highway and robbed of valuables by armed men",
+        "the accused allegedly snatched jewellery after threatening the complainant with a sharp weapon",
+        "a gang reportedly held up the complainant's vehicle and demanded valuables under threat",
+        "the accused allegedly beat the complainant and fled with cash during an attempted robbery",
+        "the complainant reportedly handed over belongings after being threatened by multiple assailants",
+    ],
+    "Domestic violence / 498A": [
+        "the complainant alleged repeated physical abuse by her husband over dowry demands",
+        "the complainant reported being confined to a room and denied food by in-laws",
+        "the complainant alleged verbal and emotional abuse by family members over a period of months",
+        "the complainant reported being threatened with harm if additional dowry was not provided",
+        "the complainant alleged being physically assaulted by her husband after a domestic dispute",
+        "the complainant reported being subjected to persistent harassment by her in-laws",
+        "the complainant alleged being denied access to her children by the accused",
+        "the complainant reported sustained mental cruelty linked to ongoing dowry-related demands",
+    ],
+    "Cybercrime": [
+        "the complainant's bank account was reportedly accessed without authorization and funds transferred out",
+        "the accused allegedly created a fake social media profile impersonating the complainant",
+        "the complainant reportedly received a phishing link that led to unauthorized withdrawal of funds",
+        "the accused allegedly used the complainant's SIM card details to access his banking app",
+        "the complainant reported being blackmailed using morphed images posted online",
+        "the accused allegedly gained access to the complainant's email account and altered its recovery settings",
+        "the complainant reportedly lost money after clicking a fraudulent investment advertisement online",
+        "the accused allegedly used stolen card details to make unauthorized online purchases",
+    ],
+    "Burglary / housebreaking": [
+        "the accused allegedly broke a rear window and entered the house while the family was away",
+        "the premises were reportedly broken into overnight and valuables were found missing the next morning",
+        "the accused allegedly picked the lock of the shop's shutter and entered after closing hours",
+        "jewellery and cash were reportedly taken from a locked cupboard after forced entry",
+        "the accused allegedly climbed over a compound wall and entered through an unlocked door",
+        "the complainant returned home to find the main door forced open and belongings missing",
+        "the accused allegedly cut through a grill window to gain entry into the residence",
+        "electronics and cash were reportedly stolen after the accused broke into an unoccupied flat",
+    ],
+    "Other": [
+        "the accused allegedly set fire to farm equipment following a longstanding dispute",
+        "the complainant alleged that the accused damaged his vehicle during a heated confrontation",
+        "the accused reportedly caused a public disturbance that escalated into property damage",
+        "the complainant alleged the accused trespassed onto his land and damaged the boundary fence",
+        "the accused allegedly threw stones at the complainant's shop during a dispute",
+        "the complainant reported that the accused vandalized his vehicle overnight",
+        "the accused allegedly caused a scene at a public gathering leading to a scuffle",
+        "the complainant alleged the accused damaged crops on his land during a boundary dispute",
+    ],
+}
 
-def _build_narrative(fake: Faker, category: str, district: str, location_name: str,
+# Shared across categories deliberately - circumstance framing (time/place/
+# distraction) doesn't carry crime-type signal in reality either, so reusing
+# one pool keeps the *action* phrases as the only cross-category-differentiating
+# axis while still multiplying combinations (8 actions x 15 circumstances =
+# 120 per category) without authoring 9 separate circumstance pools.
+MO_CIRCUMSTANCE_PHRASES = [
+    "in a quiet residential lane late at night",
+    "amid heavy traffic near a busy signal junction",
+    "while the complainant had briefly stepped away",
+    "during the crowded evening commute hours",
+    "as the complainant was distracted by a passerby",
+    "near an unattended area outside a local market",
+    "shortly after the premises had been left unattended",
+    "close to a bus stand during peak hours",
+    "during a momentary lapse in supervision",
+    "in broad daylight near a busy junction",
+    "amid the confusion of a large public gathering",
+    "late in the evening as shops were closing",
+    "in an isolated stretch away from public view",
+    "during the early morning hours before daybreak",
+    "over the course of several days leading up to the incident",
+]
+
+# Round 3 (Defect Tracker: Round 2's 21-word narrative_core sample-tested
+# WORSE on near-duplicates than the full-corpus Round 2 result - 199/225 vs
+# 1,124/3,720 - because Voyage's embeddings for very short inputs cluster
+# together almost independent of content (mean pairwise cosine similarity
+# 0.7576 across ALL 225 sampled FIRs, regardless of category - higher than
+# the OLD 82-word narrative_text's cross-category baseline of ~0.82 on the
+# full corpus). Round 3 targets 40-60 words, but every added word must be
+# genuine case-specific content, not generic scene-setting (that would just
+# recreate Round 1/2's dilution problem at smaller scale) - so this round
+# adds two NEW category-specific slots (method/weapon specifics, outcome/
+# escape sequence) and, critically, incorporates REAL per-FIR data already
+# generated earlier in build_firs (location_name, district, accused_known,
+# accused_name) rather than more authored filler. MO_CIRCUMSTANCE_PHRASES
+# above is dropped from narrative_core's composition for this reason - it's
+# generic time/place framing, exactly the kind of padding this round is
+# guarding against, and real location_name/district now cover that role
+# with actual case data instead.
+MO_METHOD_PHRASES = {
+    "Theft": [
+        "using a small blade to slit open the bag",
+        "by quietly lifting the item without drawing attention",
+        "while posing as a fellow customer browsing nearby",
+        "by creating a distraction before reaching for the item",
+        "using a decoy conversation to divert attention",
+        "by reaching in through a gap left in the counter",
+    ],
+    "Vehicle theft / snatching": [
+        "by breaking the steering lock within moments",
+        "while riding pillion on another two-wheeler",
+        "by snapping the chain in a single swift motion",
+        "using a duplicate key suspected to have been made in advance",
+        "by pushing the vehicle away before starting the engine at a distance",
+        "while the ignition had been left unattended briefly",
+    ],
+    "Assault / hurt": [
+        "using a wooden stick kept nearby",
+        "with bare hands during the scuffle",
+        "by pushing the complainant against a wall",
+        "using a metal rod picked up during the argument",
+        "by repeatedly kicking the complainant after he fell",
+        "with an open palm across the face",
+    ],
+    "Fraud / cheating": [
+        "through a fabricated investment proposal shared over phone calls",
+        "using a forged letterhead resembling a government office",
+        "by promising a discount available only for immediate cash payment",
+        "through a fake online storefront created for the purpose",
+        "using a borrowed identity document to open the transaction",
+        "by presenting doctored bank statements as proof of funds",
+    ],
+    "Robbery / dacoity": [
+        "brandishing a knife to threaten the complainant",
+        "with three others blocking the complainant's path",
+        "using a country-made weapon to intimidate the complainant",
+        "by surrounding the complainant's vehicle at a signal",
+        "while one accomplice kept watch nearby",
+        "using physical force to overpower the complainant",
+    ],
+    "Domestic violence / 498A": [
+        "through repeated verbal threats over several weeks",
+        "by withholding basic household necessities",
+        "through physical intimidation in front of family members",
+        "by restricting contact with her own family",
+        "through coordinated pressure from multiple in-laws",
+        "by repeatedly raising the same dowry demand despite refusal",
+    ],
+    "Cybercrime": [
+        "through a spoofed customer-care phone call",
+        "using a cloned SIM obtained through the telecom provider",
+        "via a malicious link sent through a messaging app",
+        "by exploiting a weak password reused across accounts",
+        "through a fake login page mimicking the bank's website",
+        "using remote-access software installed under false pretenses",
+    ],
+    "Burglary / housebreaking": [
+        "by prying open a window latch with a metal tool",
+        "using a duplicate key suspected to have been copied earlier",
+        "by cutting through a grill using a hacksaw",
+        "through a rear door left unlocked by mistake",
+        "by scaling a drainpipe to reach an upper floor window",
+        "using a crowbar to force open the main door",
+    ],
+    "Other": [
+        "following a prolonged dispute over shared property",
+        "during an argument that escalated quickly",
+        "using stones and other objects found nearby",
+        "after repeated warnings were ignored",
+        "during a confrontation at a public function",
+        "following an earlier disagreement between the two parties",
+    ],
+}
+
+MO_OUTCOME_PHRASES = {
+    "Theft": [
+        "before disappearing into the crowd on foot",
+        "and was gone by the time the loss was noticed",
+        "before slipping out through a side entrance",
+        "and had left the area before any alarm was raised",
+        "before boarding a passing bus to leave the area",
+        "and could not be traced despite an immediate search",
+    ],
+    "Vehicle theft / snatching": [
+        "before speeding away in the direction of the highway",
+        "and disappeared into the by-lanes before anyone could react",
+        "before the complainant could raise an alarm",
+        "and had already left the area by the time it was reported",
+        "before merging into the flow of traffic",
+        "and evaded a nearby patrol shortly after",
+    ],
+    "Assault / hurt": [
+        "leaving the complainant with visible bruises",
+        "before bystanders intervened and separated the two",
+        "resulting in a minor head injury requiring first aid",
+        "before the accused was restrained by others present",
+        "and fled the scene before the police arrived",
+        "leaving the complainant with a swollen eye and torn clothing",
+    ],
+    "Fraud / cheating": [
+        "before becoming unreachable once the payment was made",
+        "and the promised goods were never delivered",
+        "before the fraudulent nature of the scheme came to light",
+        "and the phone number used was later found to be switched off",
+        "before the office address given turned out to be non-existent",
+        "and repeated follow-ups went unanswered",
+    ],
+    "Robbery / dacoity": [
+        "before fleeing on a waiting two-wheeler",
+        "and scattered in different directions afterward",
+        "before the complainant could call for help",
+        "leaving the complainant shaken but uninjured",
+        "before disappearing into a nearby wooded area",
+        "and were last seen heading towards the highway",
+    ],
+    "Domestic violence / 498A": [
+        "leading the complainant to seek refuge with relatives",
+        "before the complainant approached the police for help",
+        "resulting in the complainant leaving the marital home temporarily",
+        "leaving the complainant fearful of returning home",
+        "prompting intervention from a local women's welfare group",
+        "before the situation escalated further in recent weeks",
+    ],
+    "Cybercrime": [
+        "before the account could be secured",
+        "and the funds were moved through multiple accounts within minutes",
+        "before the fraudulent profile was reported and taken down",
+        "and the linked mobile number was changed shortly after",
+        "before the complainant could reverse the transaction",
+        "and the trail went cold at an unverified account",
+    ],
+    "Burglary / housebreaking": [
+        "before the family returned later that evening",
+        "and the theft was discovered only the next morning",
+        "before neighbours noticed anything unusual",
+        "leaving the premises ransacked",
+        "before the caretaker arrived for the morning shift",
+        "and no immediate witnesses came forward",
+    ],
+    "Other": [
+        "before the situation was brought under control by others present",
+        "resulting in damage that was assessed the following day",
+        "before the matter was reported to the local authorities",
+        "leaving both parties present at the scene when police arrived",
+        "before tempers cooled and the crowd dispersed",
+        "and the dispute remains unresolved at the time of filing",
+    ],
+}
+
+
+def _build_narrative_core(core_rng: random.Random, category: str, location_name: str,
+                           district: str, accused_known: bool, accused_name: str | None) -> str:
+    """Boilerplate-free, category-differentiating text for embedding only
+    (see the block comments above) - independent of narrative_text's own
+    mo_phrase (NARRATIVE_MO_PHRASES, shared `random` stream, unchanged) and
+    of narrative_rng (drives narrative_text's own clauses), so this can't
+    perturb either. location_name/district/accused_known/accused_name are
+    NOT new randomness - they're already-computed values from earlier in
+    build_firs's loop, passed in as-is; using them here adds real per-case
+    specificity at zero determinism risk to any other field."""
+    action = core_rng.choice(MO_ACTION_PHRASES[category])
+    method = core_rng.choice(MO_METHOD_PHRASES[category])
+    outcome = core_rng.choice(MO_OUTCOME_PHRASES[category])
+    location_clause = f"near {location_name} in {district} district"
+    if accused_known and accused_name:
+        accused_clause = f"the accused, identified as {accused_name}, is known to the complainant"
+    else:
+        accused_clause = "the accused involved could not be identified at the scene"
+    return f"{action}, {method}, {location_clause}. {accused_clause}, {outcome}."
+
+# Added to fix Section 4.7 Level 3 semantic validation failures (all 5 checks
+# failed on the first embedding run - same-category 0.94 vs 0.65-0.85 target,
+# 2,176/3,720 FIRs flagged as near-duplicates vs a 0-violator target). Root
+# cause: these three clauses were each a single fixed string (or, for
+# registration_note, a rigid fixed frame) present in nearly every narrative
+# regardless of crime category, so they dominated the embedding input over
+# the actual category-specific MO vocabulary. UNIDENTIFIED_ACCUSED_TEMPLATES
+# and REGISTRATION_NOTE_TEMPLATES are the two clauses named in that
+# diagnosis; INVESTIGATION_DETAIL_TEMPLATES is a third instance of the exact
+# same defect (100% fixed across literally every FIR, not just the
+# unidentified-accused ~45%) surfaced in the same diagnosis's quoted
+# evidence, so it's fixed alongside the other two rather than left in place.
+# registration_note's variants stay regime-neutral (no IPC/BNS section
+# numbers) per Section 4.3 - only the framing phrase varies, not its content.
+UNIDENTIFIED_ACCUSED_TEMPLATES = [
+    "The accused is presently unidentified; efforts are underway to establish identity.",
+    "No description of the accused could be obtained at the time of filing; inquiries into identity are ongoing.",
+    "The identity of the accused remains unknown at this stage; local inquiries are being conducted.",
+    "The accused could not be identified by the complainant; the matter is under active inquiry.",
+    "As of filing, the accused had not been identified; investigators are pursuing available leads.",
+    "The complainant was unable to identify the accused; identification efforts are continuing.",
+]
+
+INVESTIGATION_DETAIL_TEMPLATES = [
+    "Further details of the incident are being verified during investigation.",
+    "Investigation into the circumstances of the case is currently in progress.",
+    "The matter is being examined further as part of the ongoing investigation.",
+    "Additional facts surrounding the incident are being ascertained by investigating officers.",
+    "The case is being investigated further to establish the complete sequence of events.",
+    "Relevant facts of the case continue to be verified as the investigation proceeds.",
+]
+
+REGISTRATION_NOTE_TEMPLATES = [
+    "FIR registered on {date} at {station}.",
+    "This FIR was registered on {date} at {station}.",
+    "The complaint was formally registered on {date} at {station}.",
+    "Case registered on {date} at {station}.",
+    "Formal registration of this case took place on {date} at {station}.",
+]
+
+
+def _build_narrative(narrative_rng: random.Random, category: str, district: str, location_name: str,
                       complainant: str, accused_known: bool, accused_name: str | None,
                       date_filed: date, police_station: str, has_witness: bool) -> str:
+    # mo_phrase/time_str/witness_para draw from the SHARED `random` module,
+    # completely unchanged from before this function grew new variation -
+    # every other field in build_firs's loop is also drawn from that same
+    # shared stream, so touching the number/order of calls here at all would
+    # shift the stream and silently change unrelated fields (district, date,
+    # crime_type, ...) for every FIR after this one. Confirmed the hard way:
+    # an earlier version of this fix moved these three onto a local RNG too
+    # and it reproduced FIR #1 exactly but diverged everywhere from FIR #2
+    # onward - byte-for-byte proof the stream position matters here.
+    #
+    # accused_para (unidentified branch)/detail_para/registration_note are
+    # NEW variation added by this fix (the old code had zero random calls
+    # for them - fixed strings). They draw from `narrative_rng`, a per-FIR
+    # local Random seeded independently (see build_firs) that never touches
+    # the shared stream - so adding this variation changes narrative_text
+    # only, nothing else, by construction rather than by coincidence.
     mo_phrase = random.choice(NARRATIVE_MO_PHRASES.get(category, NARRATIVE_MO_PHRASES["Other"]))
     time_str = f"{random.randint(0, 23):02d}:{random.choice(['00', '15', '30', '45'])}"
     intro = (f"On {date_filed.isoformat()}, at approximately {time_str} hours, at {location_name} "
@@ -652,10 +1034,11 @@ def _build_narrative(fake: Faker, category: str, district: str, location_name: s
         accused_para = (f"The accused, identified as {accused_name}, was reportedly seen in the "
                          f"vicinity around the time of the incident and is stated to be known to the complainant.")
     else:
-        accused_para = "The accused is presently unidentified; efforts are underway to establish identity."
-    detail_para = f"Further details of the incident are being verified during investigation."
+        accused_para = narrative_rng.choice(UNIDENTIFIED_ACCUSED_TEMPLATES)
+    detail_para = narrative_rng.choice(INVESTIGATION_DETAIL_TEMPLATES)
     witness_para = random.choice(WITNESS_NOTE_TEMPLATES) if has_witness else ""
-    registration_note = f"FIR registered on {date_filed.isoformat()} at {police_station}."
+    registration_note = narrative_rng.choice(REGISTRATION_NOTE_TEMPLATES).format(
+        date=date_filed.isoformat(), station=police_station)
     parts = [intro, accused_para, detail_para]
     if witness_para:
         parts.append(witness_para)
@@ -674,7 +1057,8 @@ def _pick_event_context(d: date) -> str:
     return random.choice(candidates)
 
 
-def build_firs(fake: Faker, count: int, crime_types: list[dict], years: tuple[int, int]) -> list[dict]:
+def build_firs(fake: Faker, count: int, crime_types: list[dict], years: tuple[int, int],
+                seed: int) -> list[dict]:
     districts = [d for d, _ in KARNATAKA_DISTRICTS]
     district_weight_map = dict(KARNATAKA_DISTRICTS)
     months = []
@@ -746,9 +1130,21 @@ def build_firs(fake: Faker, count: int, crime_types: list[dict], years: tuple[in
             accused_name = person_name(fake) if accused_known else None
             has_witness = random.random() < 0.40
             modus_operandi = random.choice(NARRATIVE_MO_PHRASES.get(category, NARRATIVE_MO_PHRASES["Other"]))
+            # Local, isolated RNG per FIR - deterministic (seed + fir_counter)
+            # but never touches the shared `random` stream every other field
+            # in this loop draws from. See _build_narrative's docstring note.
+            narrative_rng = random.Random(f"{seed}:{fir_counter}")
             narrative_text = _build_narrative(
-                fake, category, district, location_name, complainant, accused_known,
+                narrative_rng, category, district, location_name, complainant, accused_known,
                 accused_name, date_filed, police_station, has_witness,
+            )
+            # Separate, independently-seeded RNG (distinct seed string from
+            # narrative_rng above) - guarantees this Round 2 addition can't
+            # perturb narrative_rng's own draw sequence and change narrative_text
+            # itself, which must stay byte-identical to Round 1's output.
+            core_rng = random.Random(f"{seed}:core:{fir_counter}")
+            narrative_core = _build_narrative_core(
+                core_rng, category, location_name, district, accused_known, accused_name,
             )
 
             firs.append({
@@ -763,6 +1159,7 @@ def build_firs(fake: Faker, count: int, crime_types: list[dict], years: tuple[in
                 "sections_cited": sections_cited,
                 "status": status,
                 "narrative_text": narrative_text,
+                "narrative_core": narrative_core,
                 "modus_operandi": modus_operandi,
                 "event_context": event_context,
                 "investigation_stage": investigation_stage,
@@ -813,7 +1210,7 @@ def main():
     witnesses = build_witnesses(fake, args.n_witnesses)
     vehicles = build_vehicles(args.n_vehicles)
     phones = build_phone_numbers(args.n_phones)
-    firs = build_firs(fake, args.n_firs, crime_types, (args.year_start, args.year_end))
+    firs = build_firs(fake, args.n_firs, crime_types, (args.year_start, args.year_end), args.seed)
 
     outputs = {
         "crime_types.json": crime_types,
