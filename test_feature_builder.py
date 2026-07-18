@@ -7,7 +7,10 @@ the real committed accused_persons.csv (100% prior_offense_count == 0 — see fe
 module docstring for why) — this is what a real Neo4j ACCUSED_IN join would actually look like.
 """
 
+import csv
 from datetime import date
+
+import pytest
 
 from feature_builder import (
     AccusedCase,
@@ -15,7 +18,29 @@ from feature_builder import (
     Offense,
     build_accused_features,
     build_hotspot_features,
+    load_fir_records,
+    write_feature_csv,
 )
+
+# Header + rows copied verbatim from the committed data/catalyst_datastore/firs.csv, which is
+# already in live/post-two-pass-FK-load shape (district_id holds a Catalyst ROWID, not
+# "DIST-01") -- this is what proves load_fir_records works against real export shape, not
+# just an invented fixture.
+LIVE_SHAPED_FIRS_HEADER = (
+    "fir_id,fir_number,district_id,police_station,date_filed,date_of_incident,crime_type,"
+    "legal_code,sections_cited,status,narrative_text,modus_operandi,event_context,"
+    "investigation_stage,created_at,updated_at,created_by,updated_by"
+)
+LIVE_SHAPED_FIRS_ROWS = [
+    'FIR-000001,01/2021/000001,42963000000035012,Bagalkot Police Station 2,2021-01-25,'
+    '2021-01-25 00:00:00,Assault / hurt,IPC,394,UNDER_INVESTIGATION,"Narrative text.",'
+    "Physical altercation,NONE,FIR_REGISTERED,2026-07-15 14:36:44,2026-07-15 14:36:44,"
+    "SYSTEM_SEED,SYSTEM_SEED",
+    'FIR-000002,01/2021/000002,42963000000035012,Bagalkot Police Station 3,2021-03-25,'
+    '2021-01-12 00:00:00,Vehicle theft / snatching,IPC,"379,411",CHARGESHEETED,'
+    '"Narrative text.",Snatch and run,UGADI,CHARGESHEET_FILED,2026-07-15 14:36:44,'
+    "2026-07-15 14:36:44,SYSTEM_SEED,SYSTEM_SEED",
+]
 
 CRIME_TYPE_SEVERITY = {
     # Illustrative only for these tests — no documented mapping exists (see module docstring).
@@ -172,3 +197,76 @@ def test_hotspot_event_context_and_yoy_delta():
     assert march_2024["rolling_3m_avg"] == (1 + 1 + 3) / 3
     # March 2023 had 2 FIRs -> yoy_delta = 3 - 2 = 1
     assert march_2024["yoy_delta"] == 1
+
+
+def test_load_fir_records_from_live_shaped_csv(tmp_path):
+    csv_path = tmp_path / "firs.csv"
+    csv_path.write_text(
+        LIVE_SHAPED_FIRS_HEADER + "\n" + "\n".join(LIVE_SHAPED_FIRS_ROWS) + "\n"
+    )
+
+    records = load_fir_records(csv_path)
+
+    assert len(records) == 2
+    assert records[0] == FirRecord(
+        fir_id="FIR-000001",
+        district_id="42963000000035012",  # ROWID, not "DIST-01" -- see FirRecord docstring
+        crime_type="Assault / hurt",
+        date_filed=date(2021, 1, 25),
+        event_context="NONE",
+    )
+    assert records[1].event_context == "UGADI"
+    assert records[1].date_filed == date(2021, 3, 25)
+
+
+def test_load_fir_records_feeds_build_hotspot_features(tmp_path):
+    csv_path = tmp_path / "firs.csv"
+    csv_path.write_text(
+        LIVE_SHAPED_FIRS_HEADER + "\n" + "\n".join(LIVE_SHAPED_FIRS_ROWS) + "\n"
+    )
+
+    rows = build_hotspot_features(load_fir_records(csv_path))
+
+    assert len(rows) == 2  # 2021-01 and 2021-03, different crime_type each
+    assert {r["district"] for r in rows} == {"42963000000035012"}
+
+
+def test_load_fir_records_missing_required_column_raises(tmp_path):
+    csv_path = tmp_path / "firs.csv"
+    csv_path.write_text("fir_id,district_id,date_filed,event_context\nFIR-1,D1,2021-01-01,NONE\n")
+
+    with pytest.raises(ValueError, match="missing required firs column"):
+        load_fir_records(csv_path)
+
+
+def test_load_fir_records_bad_date_format_raises(tmp_path):
+    csv_path = tmp_path / "firs.csv"
+    csv_path.write_text(
+        "fir_id,district_id,crime_type,date_filed,event_context\n"
+        "FIR-1,D1,Theft,25/01/2021,NONE\n"
+    )
+
+    with pytest.raises(ValueError, match="FIR-1.*unparseable date_filed"):
+        load_fir_records(csv_path)
+
+
+def test_write_feature_csv_round_trip(tmp_path):
+    firs = [
+        FirRecord("FIR-1", "DIST-A", "Theft", date(2024, 3, 5), "NONE"),
+        FirRecord("FIR-2", "DIST-A", "Theft", date(2024, 3, 20), "NONE"),
+    ]
+    rows = build_hotspot_features(firs)
+    out_path = tmp_path / "hotspot_features.csv"
+
+    write_feature_csv(rows, out_path)
+
+    with open(out_path, newline="") as f:
+        read_back = list(csv.DictReader(f))
+    assert read_back[0]["district"] == "DIST-A"
+    assert read_back[0]["fir_count"] == "2"  # csv round-trips everything as strings
+    assert list(read_back[0].keys()) == list(rows[0].keys())  # column order preserved
+
+
+def test_write_feature_csv_empty_rows_raises(tmp_path):
+    with pytest.raises(ValueError, match="no rows to write"):
+        write_feature_csv([], tmp_path / "empty.csv")

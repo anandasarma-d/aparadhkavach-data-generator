@@ -4,3 +4,5 @@ python-dotenv>=1.0
 psycopg[binary]>=3.2
 pgvector>=0.3
 voyageai>=0.5
+requests>=2.32
+pytest>=8.0
