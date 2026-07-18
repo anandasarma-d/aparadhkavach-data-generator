@@ -50,3 +50,4 @@ Don't reorder this chain — DataStore/Neo4j/PgVector population all depend on t
 - Don't sample FIR dates from a shared fixed list across districts (§4).
 - Don't add a CI/CD pipeline to this repo — it's deliberately absent (Section 12.9).
 - Don't write to Notion under any circumstance (Notion Access, above).
+- Do not include a Co-Authored-By line in commit messages, and do not add a 'Generated with Claude Code' footer to PR descriptions.
