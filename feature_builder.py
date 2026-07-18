@@ -17,13 +17,33 @@ this session's scope is read-only against the committed dataset.
 `crime_type_severity` (CrimeType.severity_level, 1-5 scale) has no documented mapping in any
 Notion page fetched for this task — callers must supply their own. The values used in this
 module's own tests are illustrative only, not an authoritative business decision.
+
+Hardening pass (18 Jul 2026): `load_fir_records` and `write_feature_csv` below make this
+script runnable against a real `catalyst ds:export --table firs` CSV and produce a CSV
+QuickML can ingest as a Local File System Dataset. Confirmed against both the Catalyst
+DataStore Table Creation & Population Runbook's Section 5.4 firs schema and the actual
+committed `data/catalyst_datastore/firs.csv` (already in live/post-two-pass-FK-load shape,
+not the pre-import synthetic-generator shape): `firs.district_id` holds Catalyst's
+auto-generated ROWID (e.g. `42963000000035012`), never a `"DIST-01"`-style business key —
+`build_hotspot_features` already treats it as an opaque grouping key, so no logic change was
+needed there, only this docstring correction so nobody "fixes" it back to a string assumption
+later. `date_filed` is confirmed Date-only (`YYYY-MM-DD`, no time component) in that same
+committed file. Still genuinely unconfirmed: whether a real `catalyst ds:export` run emits
+the exact same Date format `catalyst_datastore_transform.py` wrote — the Runbook documents
+the DateTime gotcha (ISO-8601 `T`/`Z` rejected on *import*) but says nothing about export
+formatting for Date columns specifically. `load_fir_records` fails fast with the offending
+`fir_id` and raw value on a date it can't parse, rather than silently misreading it, so this
+is safe to try against a real export first — flagged for Anand to confirm on the first live
+run, not fixed here.
 """
 
 from __future__ import annotations
 
+import csv
 import statistics
 from dataclasses import dataclass
 from datetime import date
+from pathlib import Path
 
 
 @dataclass(frozen=True)
@@ -102,7 +122,13 @@ def build_accused_features(
 
 @dataclass(frozen=True)
 class FirRecord:
-    """The subset of a firs.csv row the hotspot forecaster's feature set actually reads."""
+    """The subset of a firs.csv row the hotspot forecaster's feature set actually reads.
+
+    district_id is a Catalyst ROWID string (e.g. "42963000000035012") in a live
+    ds:export/committed firs.csv, not a "DIST-01"-style business key — see module docstring.
+    Only used here as an opaque grouping key, so this is a labelling note, not a behavior
+    constraint.
+    """
 
     fir_id: str
     district_id: str
@@ -159,3 +185,64 @@ def build_hotspot_features(firs: list[FirRecord]) -> list[dict]:
             }
         )
     return rows
+
+
+REQUIRED_FIRS_COLUMNS = ("fir_id", "district_id", "crime_type", "date_filed", "event_context")
+
+
+def load_fir_records(csv_path: str | Path) -> list[FirRecord]:
+    """Reads a `catalyst ds:export --table firs` (or equivalently-shaped, e.g. the committed
+    `data/catalyst_datastore/firs.csv`) CSV into `FirRecord`s for `build_hotspot_features`.
+
+    Reads by column name (`csv.DictReader`), not position — the Runbook's column order and a
+    real export's column order aren't guaranteed to match, and this way they don't need to.
+    Fails fast on a missing required column or an unparseable date_filed, naming the exact
+    column or fir_id/raw value at fault, rather than silently building a wrong feature table.
+    """
+    with open(csv_path, newline="", encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        fieldnames = set(reader.fieldnames or ())
+        missing = [c for c in REQUIRED_FIRS_COLUMNS if c not in fieldnames]
+        if missing:
+            raise ValueError(
+                f"{csv_path}: missing required firs column(s) {missing} — "
+                f"found columns: {sorted(fieldnames)}"
+            )
+
+        records = []
+        for row in reader:
+            raw_date = row["date_filed"]
+            try:
+                date_filed = date.fromisoformat(raw_date)
+            except ValueError as e:
+                raise ValueError(
+                    f"{csv_path}: fir_id={row['fir_id']!r} has an unparseable date_filed "
+                    f"{raw_date!r} (expected YYYY-MM-DD) — confirm this matches what a real "
+                    f"catalyst ds:export actually emits before trusting this feature table"
+                ) from e
+
+            records.append(
+                FirRecord(
+                    fir_id=row["fir_id"],
+                    district_id=row["district_id"],
+                    crime_type=row["crime_type"],
+                    date_filed=date_filed,
+                    event_context=row["event_context"],
+                )
+            )
+    return records
+
+
+def write_feature_csv(rows: list[dict], output_path: str | Path) -> None:
+    """Writes `build_accused_features`/`build_hotspot_features` output to a CSV shaped for
+    upload as a QuickML Local File System Dataset. Column order follows each row dict's own
+    key order (Section 7.5.1/7.5.2 feature declaration order), so callers get a deterministic,
+    reviewable column layout without needing to pass fieldnames separately.
+    """
+    if not rows:
+        raise ValueError("no rows to write — refusing to produce an empty QuickML dataset CSV")
+
+    with open(output_path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
+        writer.writeheader()
+        writer.writerows(rows)
