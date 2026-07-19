@@ -161,7 +161,7 @@ environment** — two same-looking Aura consoles are easy to mix up.
 Per Section 12.9's repeatable steps (run once for staging's instance, once for prod's,
 pointing at each one's own URI/credentials):
 ```
-1. python neo4j_populate.py   # bulk load from data/entities/*.json + data/relationships/*.csv
+1. python3 scripts/neo4j_populate.py   # bulk load from data/entities/*.json + data/relationships/*.csv
 2. Run Section 4.7's Cypher validation queries (repeat-offender count, cross-district count,
    isolated-nodes check, hotspot-location check, crime-type coverage)
 ```
@@ -196,11 +196,11 @@ projects/account, which exactly matches this need (unlike Neo4j Aura, no second 
 
 Per Section 12.9, once per project, pointed at that project's own connection string:
 ```
-1. python embedding_ingestion.py   # local/manual script, not a Catalyst Circuits job
+1. python3 scripts/embedding_ingestion.py   # local/manual script, not a Catalyst Circuits job
    # Voyage AI rate limit note (confirmed empirically): an account with no payment method is
    # throttled to ~2.5 req/min safe pace, not the token allotment's implied rate — ingesting
    # ~3,720 FIRs takes ~75 minutes per environment at that pace, not ~10 minutes
-2. python semantic_validation.py   # Section 4.7 Level 3 similarity spot checks
+2. python3 scripts/semantic_validation.py   # Section 4.7 Level 3 similarity spot checks
 ```
 
 ---
@@ -283,9 +283,9 @@ commits, in every case.
 
 ---
 
-## 8. Run `feature_builder.py` against real data, then trigger Day 7 QuickML
+## 8. Run `scripts/feature_builder.py` against real data, then trigger Day 7 QuickML
 
-**Why after Sections 3–7, not before:** `feature_builder.py` (Prompt 1, `aparadhkavach-data-generator`,
+**Why after Sections 3–7, not before:** `scripts/feature_builder.py` (Prompt 1, `aparadhkavach-data-generator`,
 already merged) was deliberately built and unit-tested against a small local fixture, since the
 real committed `accused_persons.csv` had zero usable repeat-offender data at the time — that's
 now fixed (Section 2), but the QuickML pipelines still need real Neo4j (`co_accused_count` via
@@ -293,7 +293,7 @@ now fixed (Section 2), but the QuickML pipelines still need real Neo4j (`co_accu
 done for whichever environment you're running this against.
 
 ```
-1. Run feature_builder.py against the target environment's live firs/accused_persons data
+1. Run scripts/feature_builder.py against the target environment's live firs/accused_persons data
    (Neo4j for co_accused_count, DataStore for the rest) to build accused_features /
    hotspot_features
 2. Trigger the repeat offender risk scorer pipeline via the QuickML Pipeline module
