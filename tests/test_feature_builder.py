@@ -156,6 +156,69 @@ def test_multiple_accused_produce_one_row_each():
     assert rows[0]["recidivism_interval_avg"] is None
 
 
+def test_modus_operandi_none_yields_unknown_consistency():
+    # Neo4j-sourced offenses: modus_operandi is None (no such property on :FIR — see
+    # feature_builder.py module docstring). Must not silently read as "1 (consistent)".
+    case = AccusedCase(
+        accused_id="ACC-NEO4J-1",
+        offenses=(
+            Offense("FIR-1", date(2024, 1, 1), "Bagalkot", "Theft", modus_operandi=None),
+            Offense("FIR-2", date(2024, 3, 1), "Bagalkot", "Theft", modus_operandi=None),
+        ),
+        co_accused_count=0,
+    )
+    [row] = build_accused_features([case], {}, reference_date=date(2024, 4, 1))
+    assert row["modus_operandi_consistency"] is None
+
+
+def test_modus_operandi_present_still_computes_normally():
+    # Backward-compat guard: real MO strings (the pre-Neo4j fixture path) must be unaffected.
+    case = AccusedCase(
+        accused_id="ACC-FIXTURE-1",
+        offenses=(
+            Offense("FIR-1", date(2024, 1, 1), "Bagalkot", "Theft", modus_operandi="Snatch and run"),
+            Offense("FIR-2", date(2024, 3, 1), "Bagalkot", "Theft", modus_operandi="Snatch and run"),
+        ),
+        co_accused_count=0,
+    )
+    [row] = build_accused_features([case], {}, reference_date=date(2024, 4, 1))
+    assert row["modus_operandi_consistency"] == 1
+
+
+def test_per_offense_crime_type_severity_takes_precedence_over_dict():
+    # Same crime_type category ("Domestic violence / 498A"), two different real severities
+    # per-FIR (HIGH vs CRITICAL) — exactly the case a category-keyed dict alone can't represent.
+    case = AccusedCase(
+        accused_id="ACC-SEV-1",
+        offenses=(
+            Offense(
+                "FIR-1", date(2024, 1, 1), "Bagalkot", "Domestic violence / 498A",
+                modus_operandi=None, crime_type_severity=3,  # HIGH
+            ),
+            Offense(
+                "FIR-2", date(2024, 3, 1), "Bagalkot", "Domestic violence / 498A",
+                modus_operandi=None, crime_type_severity=4,  # CRITICAL
+            ),
+        ),
+        co_accused_count=0,
+    )
+    # Dict says 1 for this category — must be ignored since both offenses set their own value.
+    [row] = build_accused_features(
+        [case], {"Domestic violence / 498A": 1}, reference_date=date(2024, 4, 1)
+    )
+    assert row["crime_type_severity_max"] == 4
+
+
+def test_crime_type_severity_falls_back_to_dict_when_unset():
+    case = AccusedCase(
+        accused_id="ACC-SEV-2",
+        offenses=(Offense("FIR-1", date(2024, 1, 1), "Bagalkot", "Theft"),),
+        co_accused_count=0,
+    )
+    [row] = build_accused_features([case], {"Theft": 2}, reference_date=date(2024, 4, 1))
+    assert row["crime_type_severity_max"] == 2
+
+
 def test_hotspot_single_group_no_history():
     firs = [
         FirRecord("FIR-1", "DIST-A", "Theft", date(2024, 3, 5), "NONE"),

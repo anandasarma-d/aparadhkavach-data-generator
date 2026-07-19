@@ -228,3 +228,8 @@ __marimo__/
 /Table-districts-ERRORS.csv
 /sample_validation_round2.py
 /session_observations_2026-07-15.txt
+
+# Generated QuickML feature-table artifacts (pipeline run output, not committed dataset —
+# same convention as PR #4's hotspot_features.csv, never committed either)
+/accused_features.csv
+/hotspot_features.csv
