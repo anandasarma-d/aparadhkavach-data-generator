@@ -222,3 +222,9 @@ __marimo__/
 
 # Notion MCP
 .cursor/mcp.json
+
+# Pre-existing stray working files, flagged out of scope in an earlier PR
+# (18 Jul 2026) — see chore/repo-folder-structure PR report for disposition.
+/Table-districts-ERRORS.csv
+/sample_validation_round2.py
+/session_observations_2026-07-15.txt

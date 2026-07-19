@@ -7,15 +7,17 @@ Copy .cursor.mcp.json.example to .cursor/mcp.json and fill in your own read-only
 # Loading the dataset into your own local Neo4j + PgVector
 
 The generated dataset (`data/entities/*.json`, `data/relationships/*.csv`) is committed to
-this repo — it's the canonical output of `generate_entities.py` + `weave_relationships.py`,
-already passed through `guardrail_validator.py`'s gate. You do not need to regenerate it,
-and you do not need an AI agent to run this for you — `neo4j_populate.py` and
-`embedding_ingestion.py` are plain, deterministic Python scripts. Anyone on the team can
-point them at their own local Neo4j/PgVector and get the identical dataset loaded.
+this repo — it's the canonical output of `scripts/generate_entities.py` +
+`scripts/weave_relationships.py`, already passed through `scripts/guardrail_validator.py`'s
+gate. You do not need to regenerate it, and you do not need an AI agent to run this for
+you — `scripts/neo4j_populate.py` and `scripts/embedding_ingestion.py` are plain,
+deterministic Python scripts. Anyone on the team can point them at their own local
+Neo4j/PgVector and get the identical dataset loaded.
 
-**Do NOT run `generate_entities.py` or `weave_relationships.py`.** Those regenerate the
-dataset (with a different random seed, producing different data) — only run them if you're
-deliberately producing a new dataset version, not to load the existing one locally.
+**Do NOT run `scripts/generate_entities.py` or `scripts/weave_relationships.py`.** Those
+regenerate the dataset (with a different random seed, producing different data) — only run
+them if you're deliberately producing a new dataset version, not to load the existing one
+locally.
 
 ## 1. Prerequisites
 
@@ -52,7 +54,7 @@ docker run -d --name aparadhkavach-pgvector \
   pgvector/pgvector:pg16
 ```
 
-`embedding_ingestion.py` enables the `vector` extension automatically on first connect
+`scripts/embedding_ingestion.py` enables the `vector` extension automatically on first connect
 (`CREATE EXTENSION IF NOT EXISTS vector;`) — no manual step needed, but you can verify it
 yourself with:
 ```bash
@@ -66,28 +68,31 @@ these exact variables (nothing else, no other names or aliases):
 
 | Variable | Read by | Notes |
 |---|---|---|
-| `NEO4J_URI` | `neo4j_populate.py` | `bolt://localhost:7687` for the container above |
-| `NEO4J_USERNAME` | `neo4j_populate.py` | `neo4j` |
-| `NEO4J_PASSWORD` | `neo4j_populate.py` | `localdevpassword` for the container above |
-| `PGVECTOR_HOST` | `embedding_ingestion.py` | `localhost` (defaults to this if unset) |
-| `PGVECTOR_PORT` | `embedding_ingestion.py` | `5432` (defaults to this if unset) |
-| `PGVECTOR_DB` | `embedding_ingestion.py` | `aparadhkavach` (defaults to this if unset) |
-| `PGVECTOR_USER` | `embedding_ingestion.py` | `postgres` (defaults to this if unset) |
-| `PGVECTOR_PASSWORD` | `embedding_ingestion.py` | no default — script exits with an error if unset |
-| `VOYAGE_API_KEY` | `embedding_ingestion.py` | your own personal key, never commit it |
+| `NEO4J_URI` | `scripts/neo4j_populate.py` | `bolt://localhost:7687` for the container above |
+| `NEO4J_USERNAME` | `scripts/neo4j_populate.py` | `neo4j` |
+| `NEO4J_PASSWORD` | `scripts/neo4j_populate.py` | `localdevpassword` for the container above |
+| `PGVECTOR_HOST` | `scripts/embedding_ingestion.py` | `localhost` (defaults to this if unset) |
+| `PGVECTOR_PORT` | `scripts/embedding_ingestion.py` | `5432` (defaults to this if unset) |
+| `PGVECTOR_DB` | `scripts/embedding_ingestion.py` | `aparadhkavach` (defaults to this if unset) |
+| `PGVECTOR_USER` | `scripts/embedding_ingestion.py` | `postgres` (defaults to this if unset) |
+| `PGVECTOR_PASSWORD` | `scripts/embedding_ingestion.py` | no default — script exits with an error if unset |
+| `VOYAGE_API_KEY` | `scripts/embedding_ingestion.py` | your own personal key, never commit it |
 
 ## 4. Run order
 
+All commands below are run from the repo root — every script resolves its `data/`/`.env`
+paths relative to the current working directory, not its own location on disk.
+
 ```bash
 # 1. Neo4j: MERGE nodes + relationships, create indexes, run Level 2 validation
-python3 neo4j_populate.py
+python3 scripts/neo4j_populate.py
 
 # 2. PgVector: embed every FIR's narrative_text + crime_type + modus_operandi via
 #    Voyage voyage-3-large (1024-dim, ADR-025), create the IVFFlat cosine index once
 #    all ~3,720 rows are loaded. Idempotent/resumable - safe to re-run if it's
 #    interrupted partway (e.g. a Voyage rate-limit error), it skips FIRs already
 #    embedded rather than re-embedding and re-spending API calls.
-python3 embedding_ingestion.py
+python3 scripts/embedding_ingestion.py
 ```
 
 Note: on a free/no-billing-method Voyage account, expect a strict rate limit (observed:
@@ -100,12 +105,12 @@ faster.
 
 Don't just check that the scripts exited 0 — confirm the actual data matches:
 
-- **Neo4j (Level 2 - structural):** `neo4j_populate.py` runs
+- **Neo4j (Level 2 - structural):** `scripts/neo4j_populate.py` runs
   [Section 4.7](https://app.notion.com/p/38717f7e17c081a1959fd4ed3f644ccd)'s Level 2 Cypher
   validation queries automatically at the end (unless run with `--skip-validation`) and
   prints actual vs. expected counts (isolated nodes, repeat offenders, cross-district
   accused, hotspot locations, CrimeType coverage).
-- **PgVector (Level 3 - semantic):** run `python3 semantic_validation.py` for the 5 checks
+- **PgVector (Level 3 - semantic):** run `python3 scripts/semantic_validation.py` for the 5 checks
   from Section 4.7 Level 3 (same-category similarity, cross-category dissimilarity,
   similarity gradient, no near-duplicates, cross-regime narrative similarity). It prints
   the actual computed numbers, not just pass/fail.
