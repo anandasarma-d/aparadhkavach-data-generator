@@ -35,6 +35,27 @@ formatting for Date columns specifically. `load_fir_records` fails fast with the
 `fir_id` and raw value on a date it can't parse, rather than silently misreading it, so this
 is safe to try against a real export first — flagged for Anand to confirm on the first live
 run, not fixed here.
+
+Neo4j-driver hardening pass (19 Jul 2026, `scripts/neo4j_accused_features_driver.py`):
+confirmed against Section 5.4 and the live local graph's actual property keys (not assumed)
+that Neo4j's `:FIR` node carries no `modus_operandi` property at all — `neo4j_populate.py`'s
+own module docstring already documents this as a deliberate Section 5.4 field-projection
+decision, not an oversight. So a Neo4j-sourced `Offense` can never supply
+`modus_operandi_consistency`; `Offense.modus_operandi` is now Optional (default `None`), and
+`build_accused_features` outputs `None` (unknown) for that one feature rather than treating
+the resulting single-value set `{None}` as trivially "consistent" — which would silently
+overstate confidence for every Neo4j-sourced accused. Existing fixture tests supply real MO
+strings and are unaffected.
+
+Also confirmed live: `CrimeType.severity_level` is a 4-value ordinal string
+(`LOW`/`MEDIUM`/`HIGH`/`CRITICAL`, from `generate_entities.py`'s taxonomy) — not the "1-5
+scale" Section 7.5.1 describes — and a `crime_type` category can span CrimeType nodes of
+*different* severities (e.g. "Domestic violence / 498A" has both a HIGH and a CRITICAL
+subcategory), so the original category-keyed `crime_type_severity` dict can't losslessly
+represent per-FIR severity. `Offense.crime_type_severity` (Optional, default `None`) now
+carries the exact severity resolved per-FIR via that FIR's own `OF_TYPE` edge when available;
+`build_accused_features` prefers it over the `crime_type_severity` dict lookup when set. The
+dict-lookup path is untouched and still exercised by every existing fixture test.
 """
 
 from __future__ import annotations
@@ -48,13 +69,23 @@ from pathlib import Path
 
 @dataclass(frozen=True)
 class Offense:
-    """One FIR an accused appears in — the shape a Neo4j ACCUSED_IN join would supply."""
+    """One FIR an accused appears in — the shape a Neo4j ACCUSED_IN join would supply.
+
+    modus_operandi: None when unavailable — Neo4j's :FIR node has no modus_operandi property
+    (see module docstring); build_accused_features reports modus_operandi_consistency as
+    unknown (None) rather than guessing in that case.
+    crime_type_severity: the exact severity resolved for THIS FIR via its own OF_TYPE edge,
+    when known (see module docstring on why a crime_type-keyed dict alone isn't precise
+    enough). None falls back to the crime_type_severity dict lookup in
+    build_accused_features, preserving old behavior for existing (dict-only) callers.
+    """
 
     fir_id: str
     date_of_incident: date
     district_id: str
     crime_type: str
-    modus_operandi: str
+    modus_operandi: str | None = None
+    crime_type_severity: int | None = None
 
 
 @dataclass(frozen=True)
@@ -73,8 +104,10 @@ def build_accused_features(
 ) -> list[dict]:
     """Section 7.5.1 — 7 features per accused for the repeat-offender risk scorer.
 
-    crime_type_severity: CrimeType -> severity_level (1-5) lookup: no documented mapping
-    exists yet (see module docstring) — caller-supplied.
+    crime_type_severity: CrimeType -> severity_level lookup, used only as a fallback for
+    offenses where Offense.crime_type_severity is None (see module docstring for why a
+    per-FIR value, when available, takes precedence). No documented category-level mapping
+    exists — caller-supplied; illustrative only in this module's own tests, not authoritative.
     reference_date: "today" for days_since_last_offense — passed in, not read from the
     system clock, so this stays deterministic and testable.
     """
@@ -94,16 +127,24 @@ def build_accused_features(
             recidivism_interval_avg = None
 
         crime_type_severity_max = max(
-            (crime_type_severity.get(o.crime_type, 1) for o in offenses), default=1
+            (
+                o.crime_type_severity
+                if o.crime_type_severity is not None
+                else crime_type_severity.get(o.crime_type, 1)
+                for o in offenses
+            ),
+            default=1,
         )
 
         district_spread = len({o.district_id for o in offenses})
 
         days_since_last_offense = (reference_date - dates[-1]).days if dates else None
 
-        modus_operandi_consistency = (
-            1 if len({o.modus_operandi for o in offenses}) <= 1 else 0
-        )
+        mo_values = {o.modus_operandi for o in offenses}
+        if offense_count > 0 and None in mo_values:
+            modus_operandi_consistency = None  # unavailable, not "trivially consistent"
+        else:
+            modus_operandi_consistency = 1 if len(mo_values) <= 1 else 0
 
         rows.append(
             {
