@@ -233,3 +233,8 @@ __marimo__/
 # same convention as PR #4's hotspot_features.csv, never committed either)
 /accused_features.csv
 /hotspot_features.csv
+/risk_scores.csv
+/risk_scores_partial.csv
+
+# Catalyst DataStore import job artifacts
+/Import_*.zip
