@@ -1,0 +1,15 @@
+{
+  "seed": 42,
+  "generated_at": "2026-07-15T14:36:44Z",
+  "counts": {
+    "crime_types.json": 45,
+    "locations.json": 1120,
+    "officers.json": 180,
+    "accused.json": 4460,
+    "victims.json": 3900,
+    "witnesses.json": 1490,
+    "vehicles.json": 1300,
+    "phone_numbers.json": 2230,
+    "firs.json": 3720
+  }
+}
