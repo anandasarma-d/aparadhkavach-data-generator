@@ -235,6 +235,8 @@ __marimo__/
 /hotspot_features.csv
 /risk_scores.csv
 /risk_scores_partial.csv
+/hotspot_forecasts.csv
+/hotspot_district_names.csv
 
 # Catalyst DataStore import job artifacts
 /Import_*.zip
