@@ -151,11 +151,13 @@ activemq-data/
 .env
 .envrc
 .venv
+.env.local.bak
 env/
 venv/
 ENV/
 env.bak/
 venv.bak/
+
 
 # Spyder project settings
 .spyderproject
@@ -232,6 +234,7 @@ __marimo__/
 # Generated QuickML feature-table artifacts (pipeline run output, not committed dataset —
 # same convention as PR #4's hotspot_features.csv, never committed either)
 /accused_features.csv
+/accused_features_datastore.csv
 /hotspot_features.csv
 /risk_scores.csv
 /risk_scores_partial.csv
@@ -240,3 +243,6 @@ __marimo__/
 
 # Catalyst DataStore import job artifacts
 /Import_*.zip
+
+# PostgreSQL dump
+*.dump
