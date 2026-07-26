@@ -1,119 +1,78 @@
-# aparadhkavach-data-generator
-Python repo to generate synthetic data for AparadhKavach
+# AparadhKavach Data Generator
 
-# Notion integration MCP
-Copy .cursor.mcp.json.example to .cursor/mcp.json and fill in your own read-only Notion token (see External Services guide). Never commit .cursor/mcp.json itself.
+Python tooling and **canonical synthetic corpus** for AparadhKavach (KSP Datathon 2026 MVP-1).
 
-# Loading the dataset into your own local Neo4j + PgVector
+**Judge checkout:** default branch `main`, or tag `mvp1-submission-2026-07-26`  
+**Feeds:** Catalyst DataStore imports · Neo4j Aura · PgVector (`fir_embeddings`) · QuickML training/scoring CSVs
 
-The generated dataset (`data/entities/*.json`, `data/relationships/*.csv`) is committed to
-this repo — it's the canonical output of `scripts/generate_entities.py` +
-`scripts/weave_relationships.py`, already passed through `scripts/guardrail_validator.py`'s
-gate. You do not need to regenerate it, and you do not need an AI agent to run this for
-you — `scripts/neo4j_populate.py` and `scripts/embedding_ingestion.py` are plain,
-deterministic Python scripts. Anyone on the team can point them at their own local
-Neo4j/PgVector and get the identical dataset loaded.
-
-**Do NOT run `scripts/generate_entities.py` or `scripts/weave_relationships.py`.** Those
-regenerate the dataset (with a different random seed, producing different data) — only run
-them if you're deliberately producing a new dataset version, not to load the existing one
-locally.
-
-## 1. Prerequisites
-
-- Docker (Desktop or Engine) — both Neo4j and PgVector run as local containers per
-  [Section 12.1](https://app.notion.com/p/38717f7e17c081c7be4be1a100d9f51d)'s Development
-  environment row. No Homebrew install needed for either — this repo's local setup uses
-  Docker for both, not a mix.
-- Python 3.x, then from the repo root:
-  ```
-  python3 -m venv .venv
-  source .venv/bin/activate
-  pip install -r requirements.txt
-  ```
-- Your own Voyage AI API key (`VOYAGE_API_KEY`). Sign up at Voyage AI's dashboard — free
-  tier, no billing required to start (see the External Services Provisioning Guide, Tier 1).
-  **Get your own key, don't share one across teammates** — keys are tied to individual
-  accounts/rate limits and Voyage tracks usage per key.
-
-## 2. Start local Neo4j and PgVector containers
-
-```bash
-# Neo4j (Bolt on 7687, browser UI on 7474)
-docker run -d --name aparadhkavach-neo4j \
-  -p 7474:7474 -p 7687:7687 \
-  -e NEO4J_AUTH=neo4j/localdevpassword \
-  neo4j:5-community
-
-# PgVector (Postgres 16 + pgvector extension, on the standard 5432)
-docker run -d --name aparadhkavach-pgvector \
-  -e POSTGRES_USER=postgres \
-  -e POSTGRES_PASSWORD=localdevpassword \
-  -e POSTGRES_DB=aparadhkavach \
-  -p 5432:5432 \
-  pgvector/pgvector:pg16
+```text
+generate / weave  ──►  data/entities + data/relationships   (committed)
+        │
+        ├── neo4j_populate.py          → Neo4j (graph)
+        ├── embedding_ingestion.py     → PgVector (Voyage embeddings)
+        ├── catalyst_datastore_transform.py → DataStore CSVs
+        ├── feature_builder.py + neo4j_accused_features_driver.py → accused_features
+        └── quickml_scorer.py / seed_hotspot_forecasts.py → risk_scores / hotspot_forecasts CSVs
 ```
 
-`scripts/embedding_ingestion.py` enables the `vector` extension automatically on first connect
-(`CREATE EXTENSION IF NOT EXISTS vector;`) — no manual step needed, but you can verify it
-yourself with:
-```bash
-docker exec aparadhkavach-pgvector psql -U postgres -d aparadhkavach -c "\dx"
-```
+---
 
-## 3. Configure `.env`
+## What this repo is (and is not)
 
-Copy `.env.example` to `.env` and fill in your own `VOYAGE_API_KEY`. The scripts read
-these exact variables (nothing else, no other names or aliases):
+| Is | Is not |
+| --- | --- |
+| Schema-faithful **synthetic** KSP-scale data | Production police data |
+| Reproducible loaders + validators | The live Slate UI ([client](https://github.com/anandasarma-d/aparadhkavach-client)) |
+| QuickML CSV / seed pipelines | The AppSail Java services ([services](https://github.com/anandasarma-d/aparadhkavach-services)) |
 
-| Variable | Read by | Notes |
-|---|---|---|
-| `NEO4J_URI` | `scripts/neo4j_populate.py` | `bolt://localhost:7687` for the container above |
-| `NEO4J_USERNAME` | `scripts/neo4j_populate.py` | `neo4j` |
-| `NEO4J_PASSWORD` | `scripts/neo4j_populate.py` | `localdevpassword` for the container above |
-| `PGVECTOR_HOST` | `scripts/embedding_ingestion.py` | `localhost` (defaults to this if unset) |
-| `PGVECTOR_PORT` | `scripts/embedding_ingestion.py` | `5432` (defaults to this if unset) |
-| `PGVECTOR_DB` | `scripts/embedding_ingestion.py` | `aparadhkavach` (defaults to this if unset) |
-| `PGVECTOR_USER` | `scripts/embedding_ingestion.py` | `postgres` (defaults to this if unset) |
-| `PGVECTOR_PASSWORD` | `scripts/embedding_ingestion.py` | no default — script exits with an error if unset |
-| `VOYAGE_API_KEY` | `scripts/embedding_ingestion.py` | your own personal key, never commit it |
+Committed outputs under `data/` are the **canonical** generate+weave result (guardrail-validated). Prefer loading that corpus over regenerating unless you intentionally want a new dataset version.
 
-## 4. Run order
+---
 
-All commands below are run from the repo root — every script resolves its `data/`/`.env`
-paths relative to the current working directory, not its own location on disk.
+## Quick start
 
 ```bash
-# 1. Neo4j: MERGE nodes + relationships, create indexes, run Level 2 validation
-python3 scripts/neo4j_populate.py
-
-# 2. PgVector: embed every FIR's narrative_text + crime_type + modus_operandi via
-#    Voyage voyage-3-large (1024-dim, ADR-025), create the IVFFlat cosine index once
-#    all ~3,720 rows are loaded. Idempotent/resumable - safe to re-run if it's
-#    interrupted partway (e.g. a Voyage rate-limit error), it skips FIRs already
-#    embedded rather than re-embedding and re-spending API calls.
-python3 scripts/embedding_ingestion.py
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+cp .env.example .env   # fill Neo4j, PgVector, VOYAGE_API_KEY as needed
 ```
 
-Note: on a free/no-billing-method Voyage account, expect a strict rate limit (observed:
-3 requests/min, 10K tokens/min) rather than the standard tier's limits — a full ~3,720-FIR
-run can take on the order of an hour under that cap. Adding a payment method in Voyage's
-dashboard (still covered by the free token allotment) removes this cap if you want it
-faster.
+**Do not** run `scripts/generate_entities.py` or `scripts/weave_relationships.py` just to “get data locally” — that reshuffles the corpus. Use the committed `data/` tree + populate/embed scripts instead.
 
-## 5. Verify your local instance matches
+---
 
-Don't just check that the scripts exited 0 — confirm the actual data matches:
+## MVP-1 script map
 
-- **Neo4j (Level 2 - structural):** `scripts/neo4j_populate.py` runs
-  [Section 4.7](https://app.notion.com/p/38717f7e17c081a1959fd4ed3f644ccd)'s Level 2 Cypher
-  validation queries automatically at the end (unless run with `--skip-validation`) and
-  prints actual vs. expected counts (isolated nodes, repeat offenders, cross-district
-  accused, hotspot locations, CrimeType coverage).
-- **PgVector (Level 3 - semantic):** run `python3 scripts/semantic_validation.py` for the 5 checks
-  from Section 4.7 Level 3 (same-category similarity, cross-category dissimilarity,
-  similarity gradient, no near-duplicates, cross-regime narrative similarity). It prints
-  the actual computed numbers, not just pass/fail.
-- Fetch [Section 4.7](https://app.notion.com/p/38717f7e17c081a1959fd4ed3f644ccd) from
-  Notion for the current pass criteria before comparing — thresholds are versioned there,
-  not duplicated here, so this doesn't go stale if they change.
+| Script | Purpose |
+| --- | --- |
+| `neo4j_populate.py` | Load entities + relationships into Neo4j; Level-2 structural checks |
+| `embedding_ingestion.py` | Voyage `voyage-3-large` embeddings → `fir_embeddings` (idempotent) |
+| `semantic_validation.py` | Level-3 semantic checks on embeddings |
+| `catalyst_datastore_transform.py` | Flat CSVs for Catalyst DataStore import |
+| `feature_builder.py` | Accused feature engineering |
+| `neo4j_accused_features_driver.py` | Pull graph-derived accused features from Neo4j |
+| `generate_synthetic_risk_label.py` | Risk label helpers for ML |
+| `quickml_scorer.py` | Call QuickML scoring endpoint → `risk_scores` CSV |
+| `seed_hotspot_forecasts.py` | Pragmatic hotspot forecast seed CSV (MVP-1 path) |
+| `guardrail_validator.py` | Dataset gate before accepting a weave |
+
+Full load walkthrough: [docs/LOCAL_LOAD.md](docs/LOCAL_LOAD.md)  
+Pipelines & DataStore: [docs/PIPELINES.md](docs/PIPELINES.md)
+
+---
+
+## Related repos
+
+| Repo | Role |
+| --- | --- |
+| [aparadhkavach-client](https://github.com/anandasarma-d/aparadhkavach-client) | React UI on Slate |
+| [aparadhkavach-services](https://github.com/anandasarma-d/aparadhkavach-services) | AppSail Gateway + domain services |
+
+Live demo: [https://aparadhkavach.onslate.in/](https://aparadhkavach.onslate.in/)
+
+---
+
+## Notion MCP (contributors)
+
+Copy `.cursor.mcp.json.example` → `.cursor/mcp.json` with a read-only Notion token. Never commit `.cursor/mcp.json`.
