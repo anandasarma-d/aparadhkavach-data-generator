@@ -243,6 +243,11 @@ __marimo__/
 
 # Catalyst DataStore import job artifacts
 /Import_*.zip
+/Export_*.zip
+
+# Lane B / workbench DataStore remap CSVs (ROWID transforms — local only; do not commit)
+/*_wb*.csv
+/Table-*-workbench.csv
 
 # PostgreSQL dump
 *.dump
