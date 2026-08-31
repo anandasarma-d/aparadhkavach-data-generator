@@ -166,12 +166,50 @@ def transform_firs(firs: list[dict], rowid_map: dict[str, str] | None) -> list[d
             "modus_operandi": f["modus_operandi"],
             "event_context": f["event_context"],
             "investigation_stage": f["investigation_stage"],
+            "case_category": f.get("case_category") or "FIR",
+            "gravity": f.get("gravity") or "",
+            "complainant_id": f.get("complainant_id") or "",
+            "brief_facts": f.get("brief_facts") or "",
             "created_at": to_catalyst_datetime(f["created_at"]),
             "updated_at": to_catalyst_datetime(f["updated_at"]),
             "created_by": f["created_by"],
             "updated_by": f["updated_by"],
         }
         for f in firs
+    ]
+
+
+def transform_complainants(complainants: list[dict]) -> list[dict]:
+    return [
+        {
+            "complainant_id": c["complainant_id"],
+            "full_name": c["full_name"],
+            "age_years": c["age_years"],
+            "gender": c["gender"],
+            "occupation": c["occupation"],
+            "created_at": to_catalyst_datetime(c["created_at"]),
+            "updated_at": to_catalyst_datetime(c["updated_at"]),
+            "created_by": c["created_by"],
+            "updated_by": c["updated_by"],
+        }
+        for c in complainants
+    ]
+
+
+def transform_fir_act_sections(rows: list[dict]) -> list[dict]:
+    return [
+        {
+            "fir_id": r["fir_id"],
+            "act_code": r["act_code"],
+            "section_code": r["section_code"],
+            "act_order": r["act_order"],
+            "section_order": r["section_order"],
+            "created_at": to_catalyst_datetime(r["created_at"]),
+            "updated_at": to_catalyst_datetime(r["updated_at"]),
+            "created_by": r["created_by"],
+            "updated_by": r["updated_by"],
+        }
+        for r in rows
     ]
 
 
@@ -255,6 +293,10 @@ def main():
     accused = load_json(args.entities_dir / "accused.json")
     victims = load_json(args.entities_dir / "victims.json")
     officers = load_json(args.entities_dir / "officers.json")
+    complainants_path = args.entities_dir / "complainants.json"
+    act_sections_path = args.entities_dir / "fir_act_sections.json"
+    complainants = load_json(complainants_path) if complainants_path.exists() else []
+    fir_act_sections = load_json(act_sections_path) if act_sections_path.exists() else []
 
     rowid_map = load_district_rowid_map(args.district_rowid_csv) if args.district_rowid_csv else None
     if rowid_map is None:
@@ -273,8 +315,19 @@ def main():
             ["fir_id", "fir_number", "district_id", "police_station", "date_filed",
              "date_of_incident", "crime_type", "legal_code", "sections_cited", "status",
              "narrative_text", "modus_operandi", "event_context", "investigation_stage",
+             "case_category", "gravity", "complainant_id", "brief_facts",
              "created_at", "updated_at", "created_by", "updated_by"],
             transform_firs(firs, rowid_map),
+        ),
+        "complainants": (
+            ["complainant_id", "full_name", "age_years", "gender", "occupation",
+             "created_at", "updated_at", "created_by", "updated_by"],
+            transform_complainants(complainants),
+        ),
+        "fir_act_sections": (
+            ["fir_id", "act_code", "section_code", "act_order", "section_order",
+             "created_at", "updated_at", "created_by", "updated_by"],
+            transform_fir_act_sections(fir_act_sections),
         ),
         "accused_persons": (
             ["accused_id", "name", "age", "age_group", "gender", "address_district_id",

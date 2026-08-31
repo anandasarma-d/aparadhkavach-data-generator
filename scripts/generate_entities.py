@@ -257,6 +257,81 @@ CATEGORY_WEIGHTS = {
     "Other": 3,
 }
 
+# Thin FIR case spine (Auto/v1.0/06) — heuristic only; not KSP GravityOffence lookup.
+HEINOUS_CRIME_CATEGORIES = frozenset({
+    "Robbery / dacoity",
+    "Assault / hurt",
+    "Domestic violence / 498A",
+})
+
+CASE_CATEGORY_FIR = "FIR"
+GRAVITY_HEINOUS = "HEINOUS"
+GRAVITY_NON_HEINOUS = "NON_HEINOUS"
+
+
+def gravity_for_crime_category(category: str) -> str:
+    return GRAVITY_HEINOUS if category in HEINOUS_CRIME_CATEGORIES else GRAVITY_NON_HEINOUS
+
+
+def fir_act_section_rows(fir_id: str, legal_code: str, sections_cited: list[str]) -> list[dict]:
+    """Normalize legal_code + sections_cited into association rows (Auto/v1.0/06)."""
+    rows = []
+    for i, section in enumerate(sections_cited or []):
+        code = (section or "").strip()
+        if not code:
+            continue
+        rows.append({
+            "fir_id": fir_id,
+            "act_code": legal_code,
+            "section_code": code,
+            "act_order": 1,
+            "section_order": i + 1,
+            **audit_fields(),
+        })
+    return rows
+
+
+COMPLAINANT_OCCUPATIONS = [
+    "Farmer",
+    "Shopkeeper",
+    "Teacher",
+    "Driver",
+    "Daily wage worker",
+    "Clerk",
+    "Student",
+    "Homemaker",
+    "Business owner",
+    "Software professional",
+]
+
+
+def build_complainant(
+    fake: Faker, complainant_id: str, full_name: str, rng: random.Random
+) -> dict:
+    # Occupation from rng only — do not call fake.job() (would shift Faker mid-corpus).
+    _ = fake  # reserved for future locale-aware packs
+    gender = rng.choice([GENDER_MALE, GENDER_FEMALE])
+    return {
+        "complainant_id": complainant_id,
+        "full_name": full_name,
+        "age_years": rng.randint(18, 75),
+        "gender": gender,
+        "occupation": rng.choice(COMPLAINANT_OCCUPATIONS),
+        **audit_fields(),
+    }
+
+
+def brief_facts_from_fir(fir: dict) -> str:
+    core = fir.get("narrative_core")
+    if isinstance(core, str) and core.strip():
+        return core.strip()
+    narrative = fir.get("narrative_text") or ""
+    text = narrative.strip()
+    if len(text) <= 480:
+        return text
+    return text[:477] + "..."
+
+
 # (category, subcategory, ipc_section, ipc_description, bns_section,
 #  bns_description, severity_level, sourced_from_notion)
 _CRIME_TYPE_ROWS = [
@@ -1058,7 +1133,8 @@ def _pick_event_context(d: date) -> str:
 
 
 def build_firs(fake: Faker, count: int, crime_types: list[dict], years: tuple[int, int],
-                seed: int) -> list[dict]:
+                seed: int) -> tuple[list[dict], list[dict], list[dict]]:
+    """Returns (firs, complainants, fir_act_sections). Spine fields: Auto/v1.0/06."""
     districts = [d for d, _ in KARNATAKA_DISTRICTS]
     district_weight_map = dict(KARNATAKA_DISTRICTS)
     months = []
@@ -1093,6 +1169,8 @@ def build_firs(fake: Faker, count: int, crime_types: list[dict], years: tuple[in
         crime_types_by_category.setdefault(ct["category"], []).append(ct)
 
     firs = []
+    complainants = []
+    fir_act_sections: list[dict] = []
     fir_counter = 1
     for (district, y, m), n in zip(cells, allocations):
         if n == 0:
@@ -1147,8 +1225,19 @@ def build_firs(fake: Faker, count: int, crime_types: list[dict], years: tuple[in
                 core_rng, category, location_name, district, accused_known, accused_name,
             )
 
-            firs.append({
-                "fir_id": f"FIR-{fir_counter:06d}",
+            fir_id = f"FIR-{fir_counter:06d}"
+            complainant_id = f"CMP-{fir_counter:06d}"
+            # After all narrative person_name draws — avoid shifting Faker stream mid-FIR.
+            cmp_rng = random.Random(f"{seed}:cmp:{fir_counter}")
+            complainants.append(
+                build_complainant(fake, complainant_id, complainant, cmp_rng)
+            )
+            fir_act_sections.extend(
+                fir_act_section_rows(fir_id, legal_code, sections_cited)
+            )
+
+            fir_record = {
+                "fir_id": fir_id,
                 "fir_number": f"{DISTRICT_CODE[district]}/{y}/{fir_counter:06d}",
                 "district": district,
                 "police_station": police_station,
@@ -1163,15 +1252,22 @@ def build_firs(fake: Faker, count: int, crime_types: list[dict], years: tuple[in
                 "modus_operandi": modus_operandi,
                 "event_context": event_context,
                 "investigation_stage": investigation_stage,
+                # Auto/v1.0/06 thin case spine
+                "case_category": CASE_CATEGORY_FIR,
+                "gravity": gravity_for_crime_category(category),
+                "complainant_id": complainant_id,
+                "brief_facts": "",
                 # Internal linkage field, NOT part of Section 5.3's schema -
                 # consumed only by weave_relationships.py to create the
                 # OF_TYPE relationship without re-deriving crime_type ->
                 # CrimeType lookups ambiguously. Flagged, not silently added.
                 "_crime_type_id": crime_type["type_id"],
                 **audit_fields(),
-            })
+            }
+            fir_record["brief_facts"] = brief_facts_from_fir(fir_record)
+            firs.append(fir_record)
             fir_counter += 1
-    return firs
+    return firs, complainants, fir_act_sections
 
 
 # ---------------------------------------------------------------------------
@@ -1210,7 +1306,9 @@ def main():
     witnesses = build_witnesses(fake, args.n_witnesses)
     vehicles = build_vehicles(args.n_vehicles)
     phones = build_phone_numbers(args.n_phones)
-    firs = build_firs(fake, args.n_firs, crime_types, (args.year_start, args.year_end), args.seed)
+    firs, complainants, fir_act_sections = build_firs(
+        fake, args.n_firs, crime_types, (args.year_start, args.year_end), args.seed
+    )
 
     outputs = {
         "crime_types.json": crime_types,
@@ -1222,6 +1320,8 @@ def main():
         "vehicles.json": vehicles,
         "phone_numbers.json": phones,
         "firs.json": firs,
+        "complainants.json": complainants,
+        "fir_act_sections.json": fir_act_sections,
     }
     for filename, data in outputs.items():
         path = args.out_dir / filename

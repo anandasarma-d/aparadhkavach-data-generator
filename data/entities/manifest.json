@@ -10,6 +10,12 @@
     "witnesses.json": 1490,
     "vehicles.json": 1300,
     "phone_numbers.json": 2230,
-    "firs.json": 3720
+    "firs.json": 3720,
+    "complainants.json": 3720,
+    "fir_act_sections.json": 4987
+  },
+  "case_spine": {
+    "version": "v1.0/06",
+    "seed": 42
   }
 }

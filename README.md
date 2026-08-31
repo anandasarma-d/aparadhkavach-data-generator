@@ -48,6 +48,7 @@ cp .env.example .env   # fill Neo4j, PgVector, VOYAGE_API_KEY as needed
 | --- | --- |
 | `neo4j_populate.py` | Load entities + relationships into Neo4j; Level-2 structural checks |
 | `embedding_ingestion.py` | Voyage `voyage-3-large` embeddings → `fir_embeddings` (idempotent) |
+| `enrich_fir_case_spine.py` | **v1.0/06** — backfill complainants + fir_act_sections + fir case fields without reshuffling narratives |
 | `semantic_validation.py` | Level-3 semantic checks on embeddings |
 | `catalyst_datastore_transform.py` | Flat CSVs for Catalyst DataStore import |
 | `feature_builder.py` | Accused feature engineering |
